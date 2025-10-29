@@ -20,30 +20,59 @@ import {
 const lobby = new LobbyStore();
 const engine = new GameEngine();
 
+type InterServerEvents = Record<string, never>;
+type SocketData = {
+  joinedTables: Set<string>;
+  playerName?: string;
+};
+
 export const registerSocketHandlers = (
-  io: Server<ClientToServerEvents, ServerToClientEvents>
+  io: Server<
+    ClientToServerEvents,
+    ServerToClientEvents,
+    InterServerEvents,
+    SocketData
+  >
 ): void => {
   io.on("connection", (socket) => {
     console.log(`Client connected: ${socket.id}`);
+    socket.data.joinedTables = new Set();
 
     socket.on("disconnect", (reason) => {
       console.log(`Client disconnected: ${socket.id} (${reason})`);
-
-      socket.rooms.forEach((room) => {
-        if (room.startsWith("table:")) {
-          const tableId = room.split(":")[1];
-          handleLeaveTable(io, socket, { tableId });
+      socket.data.joinedTables.forEach((tableId) => {
+        const table = lobby.getTable(tableId);
+        if (!table) {
+          return;
         }
+
+        const player = table.players.find((entry) => entry.id === socket.id);
+        if (!player) {
+          return;
+        }
+
+        player.isConnected = false;
+        emitTableUpdate(io, table);
       });
+      socket.data.joinedTables.clear();
     });
 
     socket.on("lobby:subscribe", (ack) => {
+      console.log(`Client ${socket.id} subscribing to lobby`);
       socket.join("lobby");
       socket.emit("lobby:snapshot", lobby.snapshot());
+      try {
+        const room = io.sockets.adapter.rooms.get("lobby");
+        const count = room ? room.size : 0;
+        console.log(`Lobby subscribers: ${count}`);
+      } catch (e) {
+        /* ignore */
+      }
       ack({ ok: true });
     });
 
     socket.on("lobby:unsubscribe", (ack) => {
+      console.log(`Client ${socket.id} unsubscribing from lobby`);
       socket.leave("lobby");
       ack({ ok: true });
     });
@@ -58,11 +87,14 @@ export const registerSocketHandlers = (
       try {
         const table = lobby.createTable(socket.id, parsed.data.playerName);
         socket.join(`table:${table.id}`);
+        socket.data.joinedTables.add(table.id);
+        socket.data.playerName = parsed.data.playerName;
         socket.emit("table:update", serializeTable(table));
         broadcastLobbyEvent(io, {
           type: "table-created",
           table: toSummary(table),
         });
+        console.log(`Table created: ${table.id} by ${socket.id}`);
         ack({ ok: true, tableId: table.id });
       } catch (error) {
         ack({ ok: false, error: parseError(error) });
@@ -76,6 +108,39 @@ export const registerSocketHandlers = (
         return;
       }
 
+      const existingTable = lobby.getTable(parsed.data.tableId);
+      if (!existingTable) {
+        ack({ ok: false, error: "Table not found" });
+        return;
+      }
+
+      socket.data.playerName = parsed.data.playerName;
+
+      const reconnectTarget = existingTable.players.find(
+        (player) =>
+          player.name === parsed.data.playerName && !player.isConnected
+      );
+
+      if (reconnectTarget && reconnectTarget.id !== socket.id) {
+        const previousId = reconnectTarget.id;
+        reconnectTarget.id = socket.id;
+        reconnectTarget.isConnected = true;
+        reconnectTarget.joinedAt = Date.now();
+
+        if (existingTable.hostId === previousId) {
+          existingTable.hostId = socket.id;
+        }
+
+        engine.rebindPlayer(existingTable, previousId, socket.id);
+
+        socket.join(`table:${existingTable.id}`);
+        socket.data.joinedTables.add(existingTable.id);
+        emitTableUpdate(io, existingTable);
+        emitGameState(io, existingTable, socket.id);
+        ack({ ok: true, tableId: existingTable.id });
+        return;
+      }
+
       try {
         const table = lobby.joinTable(
           parsed.data.tableId,
@@ -83,6 +148,7 @@ export const registerSocketHandlers = (
           parsed.data.playerName
         );
         socket.join(`table:${table.id}`);
+        socket.data.joinedTables.add(table.id);
         emitTableUpdate(io, table);
         ack({ ok: true, tableId: table.id });
       } catch (error) {
@@ -246,13 +312,24 @@ export const registerSocketHandlers = (
 };
 
 const handleLeaveTable = (
-  io: Server<ClientToServerEvents, ServerToClientEvents>,
-  socket: Socket<ClientToServerEvents, ServerToClientEvents>,
+  io: Server<
+    ClientToServerEvents,
+    ServerToClientEvents,
+    InterServerEvents,
+    SocketData
+  >,
+  socket: Socket<
+    ClientToServerEvents,
+    ServerToClientEvents,
+    InterServerEvents,
+    SocketData
+  >,
   payload: { tableId: string }
 ): AckResponse => {
   try {
     const table = lobby.leaveTable(payload.tableId, socket.id);
     socket.leave(`table:${payload.tableId}`);
+    socket.data.joinedTables.delete(payload.tableId);
 
     if (!table) {
       broadcastLobbyEvent(io, {
@@ -273,14 +350,46 @@ const handleLeaveTable = (
 };
 
 const broadcastLobbyEvent = (
-  io: Server<ClientToServerEvents, ServerToClientEvents>,
+  io: Server<
+    ClientToServerEvents,
+    ServerToClientEvents,
+    InterServerEvents,
+    SocketData
+  >,
   event: LobbyEvents
 ): void => {
+  try {
+    const room = io.sockets.adapter.rooms.get("lobby");
+    const count = room ? room.size : 0;
+    console.log(
+      `Broadcasting lobby:event -> ${event.type} (subscribers=${count})`
+    );
+  } catch (e) {
+    console.log(`Broadcasting lobby:event -> ${event.type}`);
+  }
+  // Emit to the lobby room. If there are no subscribers (e.g. HMR remounts in dev),
+  // also fallback to broadcasting to all connected sockets so clients that
+  // temporarily missed the subscribe still get the update.
   io.to("lobby").emit("lobby:event", event);
+  try {
+    const room = io.sockets.adapter.rooms.get("lobby");
+    const count = room ? room.size : 0;
+    if (count === 0) {
+      console.log("No subscribers in 'lobby' room — falling back to io.emit");
+      io.emit("lobby:event", event);
+    }
+  } catch (e) {
+    // ignore
+  }
 };
 
 const emitTableUpdate = (
-  io: Server<ClientToServerEvents, ServerToClientEvents>,
+  io: Server<
+    ClientToServerEvents,
+    ServerToClientEvents,
+    InterServerEvents,
+    SocketData
+  >,
   table: Table
 ): void => {
   const payload = serializeTable(table);
@@ -292,7 +401,12 @@ const emitTableUpdate = (
 };
 
 const emitGameState = (
-  io: Server<ClientToServerEvents, ServerToClientEvents>,
+  io: Server<
+    ClientToServerEvents,
+    ServerToClientEvents,
+    InterServerEvents,
+    SocketData
+  >,
   table: Table,
   targetSocketId?: string
 ): void => {

@@ -14,6 +14,7 @@ export type Player = {
   seat: number | null;
   isHost: boolean;
   joinedAt: number;
+  isConnected: boolean;
 };
 
 export type StandardCard = {

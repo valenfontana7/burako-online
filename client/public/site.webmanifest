@@ -1,0 +1,16 @@
+{
+  "name": "Burako Online",
+  "short_name": "Burako",
+  "description": "Juega Burako en tiempo real contra amigos. Lobby, mesas y partidas sincronizadas con Socket.IO.",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ],
+  "start_url": "/",
+  "display": "standalone",
+  "theme_color": "#8B5CF6",
+  "background_color": "#f3f0eb"
+}

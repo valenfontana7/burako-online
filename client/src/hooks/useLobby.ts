@@ -39,26 +39,34 @@ export const useLobby = (playerName: string) => {
       try {
         const socket = await ensureConnected();
 
-        socket.emit("lobby:subscribe", (ack) => {
-          if (!isMounted) {
-            return;
-          }
+        let isSubscribed = false;
 
-          if (ack.ok) {
-            setState((prev) => ({ ...prev, isConnecting: false }));
-          } else {
-            setState((prev) => ({
-              ...prev,
-              isConnecting: false,
-              error: ack.error,
-            }));
-          }
-        });
+        const subscribeToLobby = () => {
+          if (isSubscribed) return;
+          setState((prev) => ({ ...prev, isConnecting: true }));
+          socket.emit("lobby:subscribe", (ack) => {
+            if (!isMounted) {
+              return;
+            }
+
+            if (ack.ok) {
+              isSubscribed = true;
+              setState((prev) => ({ ...prev, isConnecting: false }));
+            } else {
+              setState((prev) => ({
+                ...prev,
+                isConnecting: false,
+                error: ack.error,
+              }));
+            }
+          });
+        };
 
         const handleSnapshot = (snapshot: LobbySnapshot) => {
           if (!isMounted) {
             return;
           }
+          console.log("Received lobby snapshot:", snapshot);
           setState((prev) => ({ ...prev, tables: snapshot.tables }));
         };
 
@@ -66,6 +74,8 @@ export const useLobby = (playerName: string) => {
           if (!isMounted) {
             return;
           }
+
+          console.log("Received lobby event:", event);
 
           setState((prev) => ({
             ...prev,
@@ -77,6 +87,8 @@ export const useLobby = (playerName: string) => {
           if (!isMounted) {
             return;
           }
+
+          console.log("Received table:update:", table.id, table);
 
           let shouldRequestState = false;
 
@@ -152,13 +164,16 @@ export const useLobby = (playerName: string) => {
             return;
           }
           setState((prev) => ({ ...prev, selfId: socket.id ?? null }));
+          subscribeToLobby();
         };
 
         const handleDisconnect = () => {
           if (!isMounted) {
             return;
           }
-          setState((prev) => ({ ...prev, selfId: null }));
+          // Reset subscription flag on disconnect so we can re-subscribe after reconnect
+          isSubscribed = false;
+          setState((prev) => ({ ...prev, selfId: null, isConnecting: true }));
         };
 
         socket.on("lobby:snapshot", handleSnapshot);
@@ -170,6 +185,10 @@ export const useLobby = (playerName: string) => {
         socket.on("disconnect", handleDisconnect);
 
         setState((prev) => ({ ...prev, selfId: socket.id ?? null }));
+        // Only subscribe immediately if socket is already connected. Otherwise wait for connect event.
+        if (socket.connected) {
+          subscribeToLobby();
+        }
 
         return () => {
           socket.off("lobby:snapshot", handleSnapshot);
@@ -179,7 +198,9 @@ export const useLobby = (playerName: string) => {
           socket.off("error", handleError);
           socket.off("connect", handleConnect);
           socket.off("disconnect", handleDisconnect);
-          socket.emit("lobby:unsubscribe", () => undefined);
+          if (isSubscribed) {
+            socket.emit("lobby:unsubscribe", () => undefined);
+          }
         };
       } catch (error) {
         if (!isMounted) {

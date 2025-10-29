@@ -48,11 +48,36 @@ Variables clave:
 
 > Ejecuta `npm run dev:client` y `npm run dev:server` en terminales separadas para desarrollo local.
 
-## Render.com (guía rápida)
+## Render.com
 
-1. **Cliente**: desplegar como servicio estático apuntando al directorio `client`. Comando de build: `npm run build --workspace=client`. Directorio de publicación: `client/dist`.
-2. **Servidor**: desplegar como servicio web apuntando a `server`. Comando de build: `npm run build --workspace=server`. Comando de start: `npm run start --workspace=server`. Asegurar variables `PORT`, `CLIENT_ORIGIN` y `DATABASE_URL`.
-3. **Base de datos**: crear instancia PostgreSQL en Render y copiar el `DATABASE_URL` en las variables del servidor.
+### Despliegue automatizado con `render.yaml`
+
+El repositorio incluye un blueprint (`render.yaml`) que configura dos servicios en Render:
+
+- **burako-server** (web service Node.js)
+  - `buildCommand`: `npm install && npm run build --workspace=server`
+  - `startCommand`: `npm run start --workspace=server`
+  - Variables definidas: `NODE_VERSION`, `CLIENT_ORIGINS`, `DATABASE_URL` (recuerda sustituirla por la URL real de PostgreSQL).
+- **burako-client** (static site)
+  - `buildCommand`: `npm install && npm run build --workspace=client`
+  - `publishPath`: `client/dist`
+  - Variable `VITE_SERVER_URL` apuntando al servicio backend (`https://burako-server.onrender.com`).
+
+Para desplegar con el blueprint:
+
+1. Crea una base de datos PostgreSQL en Render (o usa una existente) y copia la cadena de conexión.
+2. Desde Render, ve a **Blueprints** → **New Blueprint** → selecciona el repositorio y elige `render.yaml`.
+3. Antes de lanzar el deploy inicial, edita la variable `DATABASE_URL` con el valor real.
+4. Inicia el deploy. Render creará ambos servicios con los comandos apropiados.
+5. Tras el primer despliegue, verifica que el cliente usa la URL correcta del backend (la variable `VITE_SERVER_URL` se puede ajustar desde el dashboard si el nombre del servicio cambia).
+
+### Despliegue manual
+
+Si prefieres configurar los servicios manualmente:
+
+1. **Cliente**: servicio estático con build `npm run build --workspace=client` y publish `client/dist`. Define `VITE_SERVER_URL` apuntando al backend (por ejemplo, `https://<tu-backend>.onrender.com`).
+2. **Servidor**: servicio web Node.js en el directorio raíz. Build `npm run build --workspace=server`, start `npm run start --workspace=server`. Configura `CLIENT_ORIGINS` (incluye el dominio del cliente y cualquier dominio local) y `DATABASE_URL`.
+3. **Base de datos**: instancia PostgreSQL en Render o externa; expone la URL completa para el servidor.
 
 ## Roadmap sugerido
 

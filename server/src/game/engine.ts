@@ -343,6 +343,57 @@ export class GameEngine {
     };
   }
 
+  rebindPlayer(table: Table, previousId: string, nextId: string): void {
+    const game = table.game;
+    if (!game || previousId === nextId) {
+      return;
+    }
+
+    const promoteKey = <T>(store: Record<string, T>) => {
+      if (Object.prototype.hasOwnProperty.call(store, previousId)) {
+        store[nextId] = store[previousId];
+        delete store[previousId];
+      }
+    };
+
+    promoteKey(game.hands);
+    promoteKey(game.melds);
+    promoteKey(game.scores);
+    promoteKey(game.seatByPlayerId);
+    promoteKey(game.deadPiles);
+    promoteKey(game.playerState);
+
+    const playerMelds = game.melds[nextId];
+    if (playerMelds) {
+      playerMelds.forEach((meld) => {
+        if (meld.ownerId === previousId) {
+          meld.ownerId = nextId;
+        }
+      });
+    }
+
+    game.turnOrder = game.turnOrder.map((id) =>
+      id === previousId ? nextId : id
+    );
+
+    if (game.turn.playerId === previousId) {
+      game.turn = {
+        ...game.turn,
+        playerId: nextId,
+      };
+    }
+
+    game.tableMelds.forEach((meld) => {
+      if (meld.ownerId === previousId) {
+        meld.ownerId = nextId;
+      }
+    });
+
+    if (game.winnerId === previousId) {
+      game.winnerId = nextId;
+    }
+  }
+
   handlePlayerLeave(table: Table, playerId: string): void {
     const game = table.game;
     if (!game) {

@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import "./App.css";
 import { useLobby } from "./hooks/useLobby";
 import type { Card, Meld, StandardCard, TableStatus } from "./types/lobby";
 
 const randomName = () => `Jugador-${Math.floor(Math.random() * 900 + 100)}`;
+
+const PLAYER_NAME_STORAGE_KEY = "burako:player-name";
 
 const CARD_COLOR_LABEL: Record<StandardCard["color"], string> = {
   black: "negro",
@@ -52,17 +54,41 @@ const getCardColorClass = (card: Card): string => {
 };
 
 const describeMeld = (meld: Meld): string => {
-  const base = meld.type === "set" ? "Pierna" : "Corrida";
+  const base = meld.type === "set" ? "Pierna" : "Escalera";
   return meld.isClean ? `${base} limpia` : `${base} sucia`;
 };
 
 const App = () => {
-  const [fallbackName] = useState(() => randomName());
-  const [rawName, setRawName] = useState(() => fallbackName);
-  const playerName = useMemo(
-    () => rawName.trim() || fallbackName,
-    [fallbackName, rawName]
-  );
+  const [rawName, setRawName] = useState(() => {
+    if (typeof window === "undefined") {
+      return randomName();
+    }
+    const stored = window.localStorage.getItem(PLAYER_NAME_STORAGE_KEY);
+    if (stored && stored.trim().length > 0) {
+      return stored;
+    }
+    const generated = randomName();
+    window.localStorage.setItem(PLAYER_NAME_STORAGE_KEY, generated);
+    return generated;
+  });
+  const lastPersistedNameRef = useRef(rawName.trim() || randomName());
+  const playerName = useMemo(() => {
+    const trimmed = rawName.trim();
+    if (trimmed.length > 0) {
+      return trimmed;
+    }
+    return lastPersistedNameRef.current;
+  }, [rawName]);
+  useEffect(() => {
+    const trimmed = rawName.trim();
+    if (trimmed.length === 0) {
+      return;
+    }
+    lastPersistedNameRef.current = trimmed;
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(PLAYER_NAME_STORAGE_KEY, trimmed);
+    }
+  }, [rawName]);
   const { state, actions } = useLobby(playerName);
   const {
     createTable,
@@ -79,8 +105,9 @@ const App = () => {
   const [selectedCardIds, setSelectedCardIds] = useState<string[]>([]);
   const [selectedMeldId, setSelectedMeldId] = useState<string | null>(null);
   const [isCompactLayout, setIsCompactLayout] = useState(false);
-  const [activeCompactTab, setActiveCompactTab] =
-    useState<"info" | "players" | "melds">("info");
+  const [activeCompactTab, setActiveCompactTab] = useState<
+    "info" | "players" | "melds"
+  >("info");
   const activeTable = state.activeTable;
 
   useEffect(() => {
@@ -298,8 +325,7 @@ const App = () => {
         (gPlayer) => gPlayer.id === player.id
       );
       const isCurrentTurn =
-        game?.phase === "playing" &&
-        game.currentTurn.playerId === player.id;
+        game?.phase === "playing" && game.currentTurn.playerId === player.id;
       const classes = [
         "player-list__item",
         player.id === activeTable.hostId ? "player-list__item--host" : "",
@@ -354,9 +380,7 @@ const App = () => {
               {playerGame?.isSelf && (
                 <span className="chip chip--self">Tú</span>
               )}
-              {isCurrentTurn && (
-                <span className="chip chip--turn">Turno</span>
-              )}
+              {isCurrentTurn && <span className="chip chip--turn">Turno</span>}
               {playerGame?.hasTakenDead && (
                 <span className="chip chip--dead">Muerto</span>
               )}
@@ -472,7 +496,9 @@ const App = () => {
             </div>
             <div className="stat-card">
               <span className="stat-card__label">Descarte</span>
-              <span className="stat-card__value">{discardLabel ?? "Vacío"}</span>
+              <span className="stat-card__value">
+                {discardLabel ?? "Vacío"}
+              </span>
               <span className="stat-card__hint">
                 {discardTop ? `${discardTop.value} pts` : "Sin fichas aún"}
               </span>
@@ -507,9 +533,7 @@ const App = () => {
           <span className="chip chip--info">{tableMelds.length}</span>
         </div>
         {tableMelds.length === 0 ? (
-          <p className="table-melds__empty">
-            Todavía no hay juegos bajados.
-          </p>
+          <p className="table-melds__empty">Todavía no hay juegos bajados.</p>
         ) : (
           <ul className="meld-list">
             {tableMelds.map((meld) => {
@@ -837,7 +861,7 @@ const App = () => {
                     onClick={() => handlePlayMeld("sequence")}
                     disabled={!canPlayMeld}
                   >
-                    Bajar corrida
+                    Bajar escalera
                   </button>
                   <button
                     type="button"
@@ -972,7 +996,8 @@ const App = () => {
                     )}
                   {!isMyTurn && (
                     <p className="stage-hint">
-                      Turno de {currentPlayer ? currentPlayer.name : "otro jugador"}.
+                      Turno de{" "}
+                      {currentPlayer ? currentPlayer.name : "otro jugador"}.
                     </p>
                   )}
                 </div>

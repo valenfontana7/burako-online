@@ -30,6 +30,7 @@ const toGameSummary = (game: Table["game"]): GameSummary | undefined => {
     currentPlayerId: game.phase === "playing" ? game.turn.playerId : null,
     stockCount: game.stock.length,
     discardTop,
+    meldCount: game.tableMelds.length,
     winnerId: game.winnerId,
   };
 };
@@ -50,6 +51,7 @@ export class LobbyStore {
           seat: 0,
           isHost: true,
           joinedAt: Date.now(),
+          isConnected: true,
         },
       ],
       game: undefined,
@@ -65,7 +67,9 @@ export class LobbyStore {
       throw new Error("Table not found");
     }
 
-    if (table.players.some((player) => player.id === playerId)) {
+    const existingById = table.players.find((player) => player.id === playerId);
+    if (existingById) {
+      existingById.isConnected = true;
       return table;
     }
 
@@ -84,6 +88,7 @@ export class LobbyStore {
       seat,
       isHost: false,
       joinedAt: Date.now(),
+      isConnected: true,
     };
 
     table.players.push(player);
@@ -110,12 +115,20 @@ export class LobbyStore {
     }
 
     return table;
-
-    return table;
   }
 
   getTable(tableId: string): Table | undefined {
     return this.tables.get(tableId);
+  }
+
+  findTablesByPlayerId(playerId: string): Table[] {
+    const result: Table[] = [];
+    this.tables.forEach((table) => {
+      if (table.players.some((player) => player.id === playerId)) {
+        result.push(table);
+      }
+    });
+    return result;
   }
 
   removeTable(tableId: string): void {
