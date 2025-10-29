@@ -1,8 +1,8 @@
 services:
   - type: web
-    name: burako-app
+    name: burako-online
     env: node
-    plan: free
+    plan: starter
     region: oregon
     # build both client and server, producing server/dist and client/dist
     buildCommand: npm install && npm run build --workspace=client && npm run build --workspace=server
