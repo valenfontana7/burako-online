@@ -52,7 +52,8 @@ const clientDist = path.resolve(__dirname, "../../client/dist");
 app.use(express.static(clientDist));
 
 // SPA fallback — send index.html for unknown routes (after other API routes)
-app.get("/*", (_req, res) => {
+// Use '*' instead of '/*' to avoid path-to-regexp parsing issues in some environments
+app.get("*", (_req, res) => {
   res.sendFile(path.join(clientDist, "index.html"));
 });
 
