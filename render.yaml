@@ -4,16 +4,19 @@ services:
     env: node
     plan: starter
     region: oregon
-    # build both client and server, producing server/dist and client/dist
-    buildCommand: npm install && npm run build --workspace=client && npm run build --workspace=server
-    # start the server (server will serve client/dist statically)
-    startCommand: npm run start --workspace=server
+    # build/start configured below (clean build + start)
     envVars:
       - key: NODE_VERSION
-        value: 18.20.0
+        value: 20.19.0
       - key: CLIENT_ORIGINS
         value: https://burako-online.onrender.com,http://localhost:5173
       - key: DATABASE_URL
         value: replace-with-render-postgres-url
       - key: VITE_SERVER_URL
         value: https://burako-online.onrender.com
+    # Force clean install to avoid optional native binary resolution issues
+    # and ensure a fresh install for both workspaces
+    # Note: Render executes buildCommand in a shell on the repo root
+    buildCommand: rm -rf node_modules package-lock.json client/node_modules client/package-lock.json server/node_modules server/package-lock.json && npm install && npm run build --workspace=client && npm run build --workspace=server
+    # startCommand remains the same
+    startCommand: npm run start --workspace=server
