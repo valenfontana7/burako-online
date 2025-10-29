@@ -1,22 +1,19 @@
 services:
   - type: web
-    name: burako-server
+    name: burako-app
     env: node
     plan: free
     region: oregon
-    buildCommand: npm install && npm run build --workspace=server
+    # build both client and server, producing server/dist and client/dist
+    buildCommand: npm install && npm run build --workspace=client && npm run build --workspace=server
+    # start the server (server will serve client/dist statically)
     startCommand: npm run start --workspace=server
     envVars:
       - key: NODE_VERSION
         value: 18.20.0
       - key: CLIENT_ORIGINS
-        value: https://burako-client.onrender.com,http://localhost:5173
+        value: https://burako-online.onrender.com,http://localhost:5173
       - key: DATABASE_URL
         value: replace-with-render-postgres-url
-  - type: static_site
-    name: burako-client
-    buildCommand: npm install && npm run build --workspace=client
-    publishPath: client/dist
-    envVars:
       - key: VITE_SERVER_URL
-        value: https://burako-server.onrender.com
+        value: https://burako-online.onrender.com

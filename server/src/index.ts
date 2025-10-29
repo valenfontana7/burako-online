@@ -5,6 +5,7 @@ import { Server } from "socket.io";
 import type { ClientToServerEvents, ServerToClientEvents } from "./events";
 import { config, isAllowedOrigin } from "./config";
 import { registerSocketHandlers } from "./socketHandlers";
+import path from "path";
 
 const app = express();
 app.use(cors());
@@ -44,6 +45,15 @@ app.get("/healthz", (_req, res) => {
   };
 
   res.json(payload);
+});
+
+// Serve built client static assets (when building client+server as a single deploy)
+const clientDist = path.resolve(__dirname, "../../client/dist");
+app.use(express.static(clientDist));
+
+// SPA fallback — send index.html for unknown routes (after other API routes)
+app.get("/*", (_req, res) => {
+  res.sendFile(path.join(clientDist, "index.html"));
 });
 
 server.listen(config.port, () => {
