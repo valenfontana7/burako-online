@@ -11,12 +11,16 @@ services:
       - key: CLIENT_ORIGINS
         value: https://burako-online.onrender.com,http://localhost:5173
       - key: DATABASE_URL
-        value: replace-with-render-postgres-url
+        value: "<set-in-render-dashboard>"
       - key: VITE_SERVER_URL
-        value: https://burako-online.onrender.com
-    # Force clean install to avoid optional native binary resolution issues
-    # and ensure a fresh install for both workspaces
-    # Note: Render executes buildCommand in a shell on the repo root
-    buildCommand: rm -rf node_modules package-lock.json client/node_modules client/package-lock.json server/node_modules server/package-lock.json && npm install && npm run build --workspace=client && npm run build --workspace=server
+        value: "<set-in-render-dashboard>"
+      - key: NPM_CONFIG_OPTIONAL
+        value: "false"
+  # Force clean install to avoid optional native binary resolution issues
+  # and ensure a fresh install for both workspaces.
+  # Use `--no-optional` to skip optional native packages (Rollup native binaries)
+  # which are known to fail on some CI environments due to npm optional deps bug.
+  # Note: Render executes buildCommand in a shell on the repo root
+  buildCommand: rm -rf node_modules package-lock.json client/node_modules client/package-lock.json server/node_modules server/package-lock.json && npm install --no-optional && npm run build --workspace=client && npm run build --workspace=server
     # startCommand remains the same
     startCommand: npm run start --workspace=server
