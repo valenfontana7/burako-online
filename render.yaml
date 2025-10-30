@@ -1,10 +1,11 @@
 services:
   - type: web
     name: burako-online
+    builder: NIXPACKS
     env: node
     plan: starter
     region: oregon
-    # build/start configured below (clean build + start)
+    # build/start configured below (Nixpacks builder provides a more hermetic install)
     envVars:
       - key: NODE_VERSION
         value: 20.19.0
@@ -16,11 +17,6 @@ services:
         value: "<set-in-render-dashboard>"
       - key: NPM_CONFIG_OPTIONAL
         value: "false"
-  # Force clean install to avoid optional native binary resolution issues
-  # and ensure a fresh install for both workspaces.
-  # Use `--no-optional` to skip optional native packages (Rollup native binaries)
-  # which are known to fail on some CI environments due to npm optional deps bug.
-  # Note: Render executes buildCommand in a shell on the repo root
-  buildCommand: rm -rf node_modules package-lock.json client/node_modules client/package-lock.json server/node_modules server/package-lock.json && npm install --no-optional && npm run build --workspace=client && npm run build --workspace=server
-    # startCommand remains the same
+    # Use npm ci for reproducible installs under Nixpacks; keep NPM_CONFIG_OPTIONAL=false as guard
+    buildCommand: npm ci && npm run build --workspace=client && npm run build --workspace=server
     startCommand: npm run start --workspace=server
