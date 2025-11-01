@@ -48,6 +48,7 @@ export default function StageViewClean({
 }: Props) {
   const slotsPerRow = stagedRows[0]?.length ?? 0;
   void displayHand;
+  void currentPlayerName; // avoid unused var compile error
 
   return (
     <div
