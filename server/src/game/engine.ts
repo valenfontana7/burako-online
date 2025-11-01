@@ -182,8 +182,11 @@ export class GameEngine {
       throw new Error("No hay cartas en el descarte");
     }
 
-    const card = game.discardPile.pop() as Card;
-    game.hands[playerId].push(card);
+    // Tomar toda la pila de descarte: mover todas las cartas a la mano del jugador.
+    // Esto refleja la regla solicitada: al robar del descarte, se obtiene la pila completa.
+    const taken = Array.from(game.discardPile);
+    game.discardPile = [];
+    game.hands[playerId].push(...taken);
 
     game.turn.step = "discard";
     game.turn.drawnFrom = "discard";
@@ -294,6 +297,10 @@ export class GameEngine {
   getPublicState(table: Table, viewerId: string): PublicGameState {
     const game = this.requireGame(table);
     const discardTop = game.discardPile.at(-1) ?? null;
+    const discardCount = game.discardPile.length;
+    const DISCARD_PREVIEW = 3;
+    const discardHistory =
+      discardCount === 0 ? [] : game.discardPile.slice(-DISCARD_PREVIEW);
 
     const players = table.players.map((player) => {
       const state = game.playerState[player.id];
@@ -318,6 +325,8 @@ export class GameEngine {
       currentTurn: game.turn,
       stockCount: game.stock.length,
       discardTop,
+      discardHistory,
+      discardCount,
       tableMelds: game.tableMelds,
       players,
       winnerId: game.winnerId,
@@ -331,6 +340,7 @@ export class GameEngine {
     }
 
     const discardTop = game.discardPile.at(-1) ?? null;
+    // summary stays compatible but could later include counts if needed
 
     return {
       phase: game.phase,

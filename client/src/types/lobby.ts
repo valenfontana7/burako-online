@@ -108,6 +108,10 @@ export type PublicGameState = {
   currentTurn: TurnState;
   stockCount: number;
   discardTop: Card | null;
+  // tail of the discard pile for preview
+  discardHistory?: Card[];
+  // total number of cards in the discard pile
+  discardCount: number;
   tableMelds: Meld[];
   players: PublicPlayerState[];
   winnerId?: string;

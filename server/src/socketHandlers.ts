@@ -7,6 +7,7 @@ import {
   ClientToServerEvents,
   ServerToClientEvents,
   createTableSchema,
+  findPlayerSchema,
   extendMeldSchema,
   discardSchema,
   drawSchema,
@@ -52,6 +53,23 @@ export const registerSocketHandlers = (
         }
 
         player.isConnected = false;
+
+        // If no players remain connected in this table and a game is active,
+        // finalize the game. We call engine.handlePlayerLeave for the
+        // disconnected player which contains logic to finish the game when
+        // the remaining turn order has fewer than two players.
+        const anyConnected = table.players.some((p) => p.isConnected);
+        if (!anyConnected && table.game) {
+          try {
+            console.log(
+              `No connected players left in table ${table.id} — finalizing game`
+            );
+            engine.handlePlayerLeave(table, socket.id);
+          } catch (e) {
+            console.log(`Error finalizing game for table ${table.id}: ${e}`);
+          }
+        }
+
         emitTableUpdate(io, table);
       });
       socket.data.joinedTables.clear();
@@ -69,6 +87,25 @@ export const registerSocketHandlers = (
         /* ignore */
       }
       ack({ ok: true });
+    });
+
+    socket.on("lobby:find-player", (payload, ack) => {
+      const parsed = findPlayerSchema.safeParse(payload);
+      if (!parsed.success) {
+        ack({ ok: false, error: "Invalid payload" });
+        return;
+      }
+
+      try {
+        const tables = lobby.findTablesByPlayerName(parsed.data.playerName);
+        if (tables.length > 0) {
+          ack({ ok: true, tableId: tables[0].id });
+        } else {
+          ack({ ok: false, error: "Not found" });
+        }
+      } catch (error) {
+        ack({ ok: false, error: parseError(error) });
+      }
     });
 
     socket.on("lobby:unsubscribe", (ack) => {
@@ -111,6 +148,15 @@ export const registerSocketHandlers = (
       const existingTable = lobby.getTable(parsed.data.tableId);
       if (!existingTable) {
         ack({ ok: false, error: "Table not found" });
+        return;
+      }
+
+      // Prevent two connected players in the same table from using the same name.
+      const nameConflict = existingTable.players.find(
+        (p) => p.name === parsed.data.playerName && p.isConnected
+      );
+      if (nameConflict) {
+        ack({ ok: false, error: "Player name already in use at this table" });
         return;
       }
 
@@ -304,6 +350,31 @@ export const registerSocketHandlers = (
         const table = ensureTableForPlayer(parsed.data.tableId, socket.id);
         emitGameState(io, table, socket.id);
         ack({ ok: true });
+      } catch (error) {
+        ack({ ok: false, error: parseError(error) });
+      }
+    });
+
+    socket.on("table:request-discard", (payload, ack) => {
+      const parsed = drawSchema.safeParse(payload);
+      if (!parsed.success) {
+        ack({ ok: false, error: "Invalid payload" });
+        return;
+      }
+
+      try {
+        const table = ensureTableForPlayer(parsed.data.tableId, socket.id);
+        const game = table.game;
+        if (!game) {
+          ack({ ok: false, error: "Game not active" });
+          return;
+        }
+
+        // Send whole discard pile in ack so the client can render full stack in modal
+        // Note: we return a shallow copy to avoid mutation issues
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+        const discardPile = Array.from(game.discardPile);
+        ack({ ok: true, tableId: table.id, discardPile });
       } catch (error) {
         ack({ ok: false, error: parseError(error) });
       }

@@ -21,6 +21,12 @@ export const joinTableSchema = z.object({
 
 export type JoinTablePayload = z.infer<typeof joinTableSchema>;
 
+export const findPlayerSchema = z.object({
+  playerName: z.string().min(1).max(32),
+});
+
+export type FindPlayerPayload = z.infer<typeof findPlayerSchema>;
+
 export const leaveTableSchema = z.object({
   tableId: z.string().uuid(),
 });
@@ -80,6 +86,7 @@ export type ClientToServerEvents = {
   "lobby:leave-table": (payload: LeaveTablePayload, ack: AckCallback) => void;
   "lobby:subscribe": (ack: AckCallback) => void;
   "lobby:unsubscribe": (ack: AckCallback) => void;
+  "lobby:find-player": (payload: FindPlayerPayload, ack: AckCallback) => void;
   "table:start-game": (payload: StartGamePayload, ack: AckCallback) => void;
   "table:draw-stock": (payload: DrawPayload, ack: AckCallback) => void;
   "table:draw-discard": (payload: DrawPayload, ack: AckCallback) => void;
@@ -87,10 +94,12 @@ export type ClientToServerEvents = {
   "table:play-meld": (payload: PlayMeldPayload, ack: AckCallback) => void;
   "table:extend-meld": (payload: ExtendMeldPayload, ack: AckCallback) => void;
   "table:request-state": (payload: DrawPayload, ack: AckCallback) => void;
+  // request the full discard pile for a table (ack returns { ok: true, discardPile: Card[] })
+  "table:request-discard": (payload: DrawPayload, ack: AckCallback) => void;
 };
 
 type AckCallback = (response: AckResponse) => void;
 
 export type AckResponse =
-  | { ok: true; tableId?: string }
+  | { ok: true; tableId?: string; discardPile?: unknown[] }
   | { ok: false; error: string };

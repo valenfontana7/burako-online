@@ -8,7 +8,7 @@ import type {
 } from "../types/lobby";
 
 export type AckResponse =
-  | { ok: true; tableId?: string }
+  | { ok: true; tableId?: string; discardPile?: unknown[] }
   | { ok: false; error: string };
 
 export type ClientToServerEvents = {
@@ -51,6 +51,10 @@ export type ClientToServerEvents = {
     ack: (response: AckResponse) => void
   ) => void;
   "table:request-state": (
+    payload: { tableId: string },
+    ack: (response: AckResponse) => void
+  ) => void;
+  "table:request-discard": (
     payload: { tableId: string },
     ack: (response: AckResponse) => void
   ) => void;

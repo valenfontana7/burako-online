@@ -52,6 +52,56 @@ export const useLobby = (playerName: string) => {
             if (ack.ok) {
               isSubscribed = true;
               setState((prev) => ({ ...prev, isConnecting: false }));
+
+              // After subscribing, attempt to recover an active table id from
+              // localStorage. If the user had an active table before reload,
+              // request its state so the client rejoins the view.
+              try {
+                const stored =
+                  typeof window !== "undefined"
+                    ? window.localStorage.getItem("burako:active-table")
+                    : null;
+                if (stored) {
+                  // Attempt to rejoin the table using the stored table id and the
+                  // current playerName. The server supports a reconnect flow
+                  // where a previously disconnected player (same name) is
+                  // rebound to the new socket id and immediately sent the
+                  // current game state.
+                  socket.emit(
+                    "lobby:join-table",
+                    { tableId: stored, playerName },
+                    (ack: AckResponse) => {
+                      if (ack?.ok) {
+                        setState((prev) => ({
+                          ...prev,
+                          activeTableId: stored,
+                        }));
+                        // Server typically emits `game:state` on successful
+                        // reconnect; request state explicitly as a fallback.
+                        socket.emit(
+                          "table:request-state",
+                          { tableId: stored },
+                          () => undefined
+                        );
+                      } else {
+                        // If join fails (e.g. name conflict), clear the stored
+                        // active table so we don't repeatedly try on reload.
+                        try {
+                          if (typeof window !== "undefined") {
+                            window.localStorage.removeItem(
+                              "burako:active-table"
+                            );
+                          }
+                        } catch {
+                          /* ignore */
+                        }
+                      }
+                    }
+                  );
+                }
+              } catch {
+                // ignore storage errors
+              }
             } else {
               setState((prev) => ({
                 ...prev,
@@ -222,7 +272,7 @@ export const useLobby = (playerName: string) => {
         cleanup?.();
       });
     };
-  }, []);
+  }, [playerName]);
 
   const createTable = useCallback(async () => {
     const socket = getSocket();
@@ -239,6 +289,13 @@ export const useLobby = (playerName: string) => {
     const tableId = response.tableId ?? null;
     if (tableId) {
       setState((prev) => ({ ...prev, activeTableId: tableId }));
+      try {
+        if (typeof window !== "undefined") {
+          window.localStorage.setItem("burako:active-table", tableId);
+        }
+      } catch {
+        /* ignore */
+      }
     }
 
     return tableId;
@@ -258,8 +315,14 @@ export const useLobby = (playerName: string) => {
         setState((prev) => ({ ...prev, error: response.error }));
         return false;
       }
-
       setState((prev) => ({ ...prev, activeTableId: tableId }));
+      try {
+        if (typeof window !== "undefined") {
+          window.localStorage.setItem("burako:active-table", tableId);
+        }
+      } catch {
+        /* ignore */
+      }
       socket.emit("table:request-state", { tableId }, () => undefined);
       return true;
     },
@@ -276,6 +339,16 @@ export const useLobby = (playerName: string) => {
     if (!response.ok) {
       setState((prev) => ({ ...prev, error: response.error }));
       return false;
+    }
+    try {
+      if (typeof window !== "undefined") {
+        const stored = window.localStorage.getItem("burako:active-table");
+        if (stored === tableId) {
+          window.localStorage.removeItem("burako:active-table");
+        }
+      }
+    } catch {
+      /* ignore */
     }
 
     setState((prev) => ({
@@ -331,6 +404,24 @@ export const useLobby = (playerName: string) => {
     return response.ok;
   }, []);
 
+  const requestDiscard = useCallback(async (tableId: string) => {
+    const socket = getSocket();
+    const response = await new Promise<AckResponse>((resolve) => {
+      socket.emit("table:request-discard", { tableId }, (ack) => resolve(ack));
+    });
+
+    if (!response.ok) {
+      setState((prev) => ({ ...prev, error: response.error }));
+      return null;
+    }
+
+    // response.discardPile may be unknown[]; return as-is for now
+    // consumer will validate/convert
+    return (
+      (response as { ok: true; discardPile?: unknown[] }).discardPile ?? null
+    );
+  }, []);
+
   const playMeld = useCallback(
     async (tableId: string, cardIds: string[], type: "set" | "sequence") => {
       const socket = getSocket();
@@ -382,6 +473,7 @@ export const useLobby = (playerName: string) => {
       drawFromStock,
       drawFromDiscard,
       discardCard,
+      requestDiscard,
       playMeld,
       extendMeld,
     },

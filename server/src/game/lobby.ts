@@ -131,6 +131,16 @@ export class LobbyStore {
     return result;
   }
 
+  findTablesByPlayerName(playerName: string): Table[] {
+    const result: Table[] = [];
+    this.tables.forEach((table) => {
+      if (table.players.some((player) => player.name === playerName)) {
+        result.push(table);
+      }
+    });
+    return result;
+  }
+
   removeTable(tableId: string): void {
     this.tables.delete(tableId);
   }

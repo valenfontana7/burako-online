@@ -1,10 +1,17 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { FormEvent, ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, useRef } from "react";
+import type { ReactNode } from "react";
 import "./App.css";
 import { useLobby } from "./hooks/useLobby";
-import type { Card, Meld, StandardCard, TableStatus } from "./types/lobby";
-
-const randomName = () => `Jugador-${Math.floor(Math.random() * 900 + 100)}`;
+import Header from "./components/Header";
+import PlayerPanel from "./components/PlayerPanel";
+import LobbyList from "./components/LobbyList";
+import GamePrimary from "./components/GamePrimary";
+import PlayerList from "./components/PlayerList";
+import GameInfo from "./components/GameInfo";
+import TableMelds from "./components/TableMelds";
+import DiscardModal from "./components/DiscardModal";
+import type { Card, Meld, StandardCard, PublicGameState } from "./types/lobby";
+import ActionOverlay from "./components/ActionOverlay";
 
 const PLAYER_NAME_STORAGE_KEY = "burako:player-name";
 
@@ -22,21 +29,7 @@ const CARD_COLOR_CLASS: Record<StandardCard["color"], string> = {
   yellow: "card-tile__number--yellow",
 };
 
-const TABLE_STATUS_LABEL: Record<TableStatus, string> = {
-  waiting: "Esperando",
-  playing: "En juego",
-  finished: "Finalizada",
-};
-
-const TURN_STEP_LABEL = {
-  draw: "Robar",
-  discard: "Descartar",
-} as const;
-
-const DRAW_SOURCE_LABEL = {
-  stock: "Mazo",
-  discard: "Descarte",
-} as const;
+// status/labels are handled inside smaller components
 
 const describeCard = (card: Card): string =>
   card.kind === "joker"
@@ -44,7 +37,7 @@ const describeCard = (card: Card): string =>
     : `${card.number} ${CARD_COLOR_LABEL[card.color]}`;
 
 const getCardDisplayValue = (card: Card): string =>
-  card.kind === "joker" ? "J" : String(card.number);
+  card.kind === "joker" ? "" : String(card.number);
 
 const getCardColorClass = (card: Card): string => {
   if (card.kind === "joker") {
@@ -59,37 +52,28 @@ const describeMeld = (meld: Meld): string => {
 };
 
 const App = () => {
+  // By default do not assign a random name. If the user has a previously
+  // persisted name we prefill the input, otherwise leave it empty so the
+  // user can choose their preferred name.
   const [rawName, setRawName] = useState(() => {
-    if (typeof window === "undefined") {
-      return randomName();
-    }
+    if (typeof window === "undefined") return "";
     const stored = window.localStorage.getItem(PLAYER_NAME_STORAGE_KEY);
-    if (stored && stored.trim().length > 0) {
-      return stored;
-    }
-    const generated = randomName();
-    window.localStorage.setItem(PLAYER_NAME_STORAGE_KEY, generated);
-    return generated;
+    return stored ?? "";
   });
-  const lastPersistedNameRef = useRef(rawName.trim() || randomName());
-  const playerName = useMemo(() => {
-    const trimmed = rawName.trim();
-    if (trimmed.length > 0) {
-      return trimmed;
-    }
-    return lastPersistedNameRef.current;
-  }, [rawName]);
+
+  // `playerName` is the trimmed value entered by the user. It can be empty,
+  // in which case actions that require a name (create/join) will be disabled.
+  const playerName = useMemo(() => rawName.trim(), [rawName]);
+
   useEffect(() => {
     const trimmed = rawName.trim();
-    if (trimmed.length === 0) {
-      return;
-    }
-    lastPersistedNameRef.current = trimmed;
+    if (trimmed.length === 0) return;
     if (typeof window !== "undefined") {
       window.localStorage.setItem(PLAYER_NAME_STORAGE_KEY, trimmed);
     }
   }, [rawName]);
   const { state, actions } = useLobby(playerName);
+  const { requestDiscard } = actions;
   const {
     createTable,
     joinTable,
@@ -104,15 +88,26 @@ const App = () => {
   const [selectedTableId, setSelectedTableId] = useState<string | null>(null);
   const [selectedCardIds, setSelectedCardIds] = useState<string[]>([]);
   const [selectedMeldId, setSelectedMeldId] = useState<string | null>(null);
+  const [discardModalOpen, setDiscardModalOpen] = useState(false);
+  const [discardPileFull, setDiscardPileFull] = useState<null | Card[]>(null);
+  const [actionOverlayOpen, setActionOverlayOpen] = useState(false);
+  const [actionOverlayMessage, setActionOverlayMessage] = useState<
+    string | null
+  >(null);
   const [isCompactLayout, setIsCompactLayout] = useState(false);
   const [activeCompactTab, setActiveCompactTab] = useState<
     "info" | "players" | "melds"
   >("info");
   const activeTable = state.activeTable;
+  const [isViewingLobby, setIsViewingLobby] = useState(false);
 
   useEffect(() => {
     if (activeTable) {
       setSelectedTableId(activeTable.id);
+      // If we re-acquired the active table from the server, assume the player
+      // is back in the game view unless they explicitly chose to view the
+      // lobby.
+      setIsViewingLobby(false);
     }
   }, [activeTable]);
 
@@ -120,15 +115,95 @@ const App = () => {
   const myPlayer = game?.players.find((player) => player.isSelf) ?? null;
   const myHand = useMemo(() => myPlayer?.hand ?? [], [myPlayer]);
   const tableMelds = useMemo(() => game?.tableMelds ?? [], [game]);
-  const stagedRows = useMemo(() => {
-    const rows: Card[][] = [[], [], []];
 
-    myHand.forEach((card, index) => {
-      rows[index % 3].push(card);
+  // Local ordering for the player's hand represented as fixed slots. Each
+  // slot is either a card id or null so slot indices map directly to the
+  // rendered grid, allowing drops into empty slots.
+  const MAX_PER_ROW = 7;
+  const TOTAL_SLOTS = MAX_PER_ROW * 2;
+
+  const [handOrder, setHandOrder] = useState<(string | null)[]>(() =>
+    Array.from({ length: TOTAL_SLOTS }, () => null)
+  );
+
+  useEffect(() => {
+    const ids = myHand.map((c) => c.id);
+    setHandOrder((prev) => {
+      const slots = Array.from(prev);
+      // Remove ids that no longer exist on server
+      for (let i = 0; i < slots.length; i++) {
+        const id = slots[i];
+        if (id && !ids.includes(id)) slots[i] = null;
+      }
+      // Place new ids into the first available empty slots preserving server order
+      for (const id of ids) {
+        if (slots.includes(id)) continue;
+        const emptyIdx = slots.indexOf(null);
+        if (emptyIdx === -1) break;
+        slots[emptyIdx] = id;
+      }
+      return slots;
     });
-
-    return rows;
   }, [myHand]);
+
+  const displayHand = useMemo(() => {
+    const byId = new Map(myHand.map((c) => [c.id, c]));
+    const ordered = handOrder
+      .filter(Boolean)
+      .map((id) => byId.get(id as string))
+      .filter(Boolean) as Card[];
+    const missing = myHand.filter((c) => !handOrder.includes(c.id));
+    return [...ordered, ...missing];
+  }, [handOrder, myHand]);
+
+  const stagedRows = useMemo(() => {
+    const byId = new Map(myHand.map((c) => [c.id, c]));
+    const slots = Array.from({ length: handOrder.length }, (_, i) =>
+      handOrder[i] ? (byId.get(handOrder[i] as string) as Card) : null
+    );
+    const rows: (Card | null)[][] = [];
+    for (let r = 0; r < 2; r++) {
+      rows.push(slots.slice(r * MAX_PER_ROW, (r + 1) * MAX_PER_ROW));
+    }
+    return rows;
+  }, [handOrder, myHand]);
+
+  // Drag & drop state and handlers. We treat slots as a flat array of
+  // length MAX_PER_ROW*2; slot indices are passed as the dataTransfer payload.
+  const handleDragStart = (e: React.DragEvent, slotIndex: number) => {
+    e.dataTransfer.setData("text/plain", String(slotIndex));
+    e.dataTransfer.effectAllowed = "move";
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+  };
+
+  const handleDrop = (e: React.DragEvent, toSlotIndex: number) => {
+    e.preventDefault();
+    const fromSlot = Number(e.dataTransfer.getData("text/plain"));
+    if (Number.isNaN(fromSlot)) return;
+    setHandOrder((prev) => {
+      const slots = Array.from(prev).slice(0, TOTAL_SLOTS);
+      const movedId = slots[fromSlot];
+      if (!movedId) return prev;
+      if (fromSlot === toSlotIndex) return prev;
+
+      // If target slot is empty, move the card there.
+      const target = slots[toSlotIndex];
+      if (!target) {
+        slots[fromSlot] = null;
+        slots[toSlotIndex] = movedId;
+        return slots;
+      }
+
+      // If target occupied, swap positions.
+      slots[fromSlot] = target;
+      slots[toSlotIndex] = movedId;
+      return slots;
+    });
+  };
   const activeTableId = activeTable?.id ?? null;
   const isHost = activeTable?.hostId === state.selfId;
   const canStartGame = Boolean(
@@ -143,6 +218,8 @@ const App = () => {
   const canDraw = isMyTurn && game?.currentTurn.step === "draw";
   const canDiscard = isMyTurn && game?.currentTurn.step === "discard";
   const discardTop = game?.discardTop ?? null;
+  const discardHistory = game?.discardHistory ?? [];
+  const discardCount = game?.discardCount ?? 0;
   const discardLabel = discardTop ? describeCard(discardTop) : null;
   const currentPlayer = game
     ? activeTable?.players.find(
@@ -152,6 +229,16 @@ const App = () => {
   const winner = game?.winnerId
     ? activeTable?.players.find((player) => player.id === game.winnerId) ?? null
     : null;
+
+  const headerStageHint = (() => {
+    if (!game) return "";
+    if (isMyTurn) {
+      return game.currentTurn.step === "draw"
+        ? "Tu turno — roba"
+        : "Tu turno — descarta";
+    }
+    return currentPlayer ? `Turno de ${currentPlayer.name}` : "Esperando turno";
+  })();
   const selectedCardCount = selectedCardIds.length;
   const selectedDiscardCard = selectedCardIds[0] ?? null;
   const canPlayMeld =
@@ -167,6 +254,107 @@ const App = () => {
       prev.filter((cardId) => myHand.some((card) => card.id === cardId))
     );
   }, [myHand]);
+
+  // Detect game updates to display a brief overlay for actions performed
+  // by other players. We compare previous and current `game` state and
+  // derive a short human message.
+  const prevGameRef = useRef<PublicGameState | null>(null);
+  useEffect(() => {
+    const prev = prevGameRef.current;
+    const next = game;
+    prevGameRef.current = next;
+    if (!prev || !next) return;
+
+    // helper to lookup player name
+    const playerNameById = (id: string | null) =>
+      id
+        ? activeTable?.players.find((p) => p.id === id)?.name ?? "Jugador"
+        : "Jugador";
+
+    // If turn changed, notify the player who just became current (the
+    // opponent) so they immediately receive an overlay telling them it's
+    // their turn. Do not show this to the actor who just played.
+    if (prev.currentTurn.playerId !== next.currentTurn.playerId) {
+      const becameId = next.currentTurn.playerId;
+      if (myPlayer?.id === becameId) {
+        // Personal message for the player who now must act
+        const step = next.currentTurn.step ?? "draw";
+        const stepText =
+          step === "draw" ? "Es tu turno — roba" : "Es tu turno — descarta";
+        setActionOverlayMessage(stepText);
+        setActionOverlayOpen(true);
+      }
+      return;
+    }
+
+    // If discard count increased, someone discarded (likely the previous turn player)
+    if ((next.discardCount ?? 0) > (prev.discardCount ?? 0)) {
+      const lastDiscarder = prev.currentTurn.playerId ?? null;
+      const name = playerNameById(lastDiscarder);
+      const msg = `${name} descartó una ficha`;
+      // don't show to the actor who performed the discard
+      if (myPlayer?.id !== lastDiscarder) {
+        setActionOverlayMessage(msg);
+        setActionOverlayOpen(true);
+      }
+      return;
+    }
+
+    // If melds changed (someone played a meld) — try to identify owner and type
+    const prevMeldIds = new Set(prev.tableMelds.map((m) => m.id));
+    const newMelds = (next.tableMelds ?? []).filter(
+      (m) => !prevMeldIds.has(m.id)
+    );
+    if (newMelds.length > 0) {
+      const m = newMelds[0];
+      const ownerName = playerNameById(m.ownerId);
+      const kind = m.type === "set" ? "bajó una pierna" : "bajó una escalera";
+      if (m.ownerId !== myPlayer?.id) {
+        setActionOverlayMessage(`${ownerName} ${kind}`);
+        setActionOverlayOpen(true);
+      }
+      return;
+    }
+
+    // If someone drew from the discard (engine moves whole pile to hand)
+    if ((prev.discardCount ?? 0) > (next.discardCount ?? 0)) {
+      const taken = (prev.discardCount ?? 0) - (next.discardCount ?? 0);
+      // find player whose hand increased by approximately `taken`
+      const actor = next.players.find((p) => {
+        const prevP = prev.players.find((q) => q.id === p.id);
+        if (!prevP) return false;
+        return p.handCount - prevP.handCount === taken;
+      });
+      if (actor && actor.id !== myPlayer?.id) {
+        setActionOverlayMessage(`${actor.name} se llevó el descarte`);
+        setActionOverlayOpen(true);
+        return;
+      }
+    }
+
+    // If stock decreased and a player's hand increased by 1 -> drew from stock
+    if ((next.stockCount ?? 0) < (prev.stockCount ?? 0)) {
+      const actor = next.players.find((p) => {
+        const prevP = prev.players.find((q) => q.id === p.id);
+        if (!prevP) return false;
+        return p.handCount - prevP.handCount === 1;
+      });
+      if (actor && actor.id !== myPlayer?.id) {
+        setActionOverlayMessage(`${actor.name} robó del mazo`);
+        setActionOverlayOpen(true);
+        return;
+      }
+    }
+
+    // If winner appeared
+    if (!prev.winnerId && next.winnerId) {
+      const name = playerNameById(next.winnerId ?? null);
+      const msg = `${name} ha ganado la partida`;
+      setActionOverlayMessage(msg);
+      setActionOverlayOpen(true);
+      return;
+    }
+  }, [game, activeTable, myPlayer]);
 
   useEffect(() => {
     if (
@@ -222,11 +410,17 @@ const App = () => {
     [joinTable]
   );
 
-  const handleLeaveTable = useCallback(async () => {
+  // Permanently leave the table (resign/abandon). This calls the server
+  // leave flow and clears any client-side selection. The user will not be
+  // automatically rejoined after this action.
+  const handleResignTable = useCallback(async () => {
     const tableId = activeTable?.id ?? selectedTableId;
-    if (!tableId) {
-      return;
-    }
+    if (!tableId) return;
+
+    const confirmed = window.confirm(
+      "¿Estás seguro que quieres rendirte y abandonar la partida? Esta acción te sacará de la mesa y no te reconectará automáticamente."
+    );
+    if (!confirmed) return;
 
     const success = await leaveTable(tableId);
     if (success) {
@@ -235,6 +429,18 @@ const App = () => {
       setSelectedMeldId(null);
     }
   }, [activeTable?.id, leaveTable, selectedTableId]);
+
+  // Temporarily go back to the lobby UI while remaining part of the table on
+  // the server so the player can re-enter the game later.
+  const handleReturnToLobby = useCallback(() => {
+    setIsViewingLobby(true);
+    setSelectedTableId(null);
+  }, []);
+
+  const handleReturnToGame = useCallback(() => {
+    setIsViewingLobby(false);
+    if (activeTable) setSelectedTableId(activeTable.id);
+  }, [activeTable]);
 
   const handleStartGame = useCallback(async () => {
     if (!activeTableId) {
@@ -311,272 +517,37 @@ const App = () => {
     }
   }, [activeTableId, extendMeld, selectedCardIds, selectedMeldId]);
 
-  const handleNameSubmit = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-  };
-
-  const renderPlayerListItems = () => {
-    if (!activeTable) {
-      return null;
-    }
-
-    return activeTable.players.map((player) => {
-      const playerGame = game?.players.find(
-        (gPlayer) => gPlayer.id === player.id
-      );
-      const isCurrentTurn =
-        game?.phase === "playing" && game.currentTurn.playerId === player.id;
-      const classes = [
-        "player-list__item",
-        player.id === activeTable.hostId ? "player-list__item--host" : "",
-        isCurrentTurn ? "player-list__item--turn" : "",
-      ]
-        .filter(Boolean)
-        .join(" ");
-
-      const playerStats = playerGame
-        ? [
-            {
-              label: "Puntos",
-              value: `${playerGame.score}`,
-            },
-            {
-              label: "En mano",
-              value: `${playerGame.handCount}`,
-            },
-            {
-              label: "Muerto",
-              value: playerGame.hasTakenDead
-                ? "Tomado"
-                : `${playerGame.deadCount}`,
-            },
-            {
-              label: "Juegos",
-              value: `${playerGame.melds.length}`,
-            },
-          ]
-        : [
-            {
-              label: "Asiento",
-              value: player.seat !== null ? `${player.seat + 1}` : "—",
-            },
-            {
-              label: "Estado",
-              value: TABLE_STATUS_LABEL[activeTable.status],
-            },
-          ];
-
-      return (
-        <li key={player.id} className={classes}>
-          <div className="player-list__header">
-            <span className="player-list__name">
-              {player.name}
-              {playerGame?.isSelf ? " (Tú)" : ""}
-            </span>
-            <div className="player-list__badges">
-              {player.isHost && (
-                <span className="chip chip--host">Anfitrión</span>
-              )}
-              {playerGame?.isSelf && (
-                <span className="chip chip--self">Tú</span>
-              )}
-              {isCurrentTurn && <span className="chip chip--turn">Turno</span>}
-              {playerGame?.hasTakenDead && (
-                <span className="chip chip--dead">Muerto</span>
-              )}
-            </div>
-          </div>
-          <div className="player-list__stats">
-            {playerStats.map((stat) => (
-              <div key={stat.label} className="player-stat">
-                <span className="player-stat__label">{stat.label}</span>
-                <span className="player-stat__value">{stat.value}</span>
-              </div>
-            ))}
-          </div>
-        </li>
-      );
-    });
-  };
+  // player list rendering moved to `PlayerList` component
 
   const playerListSection = activeTable ? (
-    <section className="game-section" aria-labelledby="game-section-players">
-      <div className="game-section__header">
-        <h3 id="game-section-players">Jugadores</h3>
-        <span className="chip chip--info">{activeTable.players.length}</span>
-      </div>
-      <ul className="player-list">{renderPlayerListItems()}</ul>
-    </section>
+    <PlayerList activeTable={activeTable} game={game} />
   ) : null;
 
   const gameInfoSection = activeTable ? (
-    <section className="game-section" aria-labelledby="game-section-info">
-      <div className="game-section__header">
-        <h3 id="game-section-info">Datos de la partida</h3>
-      </div>
-      <div className="game-meta game-meta--section">
-        <div className="meta-card">
-          <span className="meta-card__label">Estado</span>
-          <span className="meta-card__value">
-            <span className={`chip chip--${activeTable.status}`}>
-              {TABLE_STATUS_LABEL[activeTable.status]}
-            </span>
-          </span>
-          <span className="meta-card__hint">
-            {activeTable.status === "waiting"
-              ? "Esperando jugadores"
-              : activeTable.status === "playing"
-              ? "Partida en curso"
-              : "Partida finalizada"}
-          </span>
-        </div>
-        <div className="meta-card">
-          <span className="meta-card__label">Jugadores</span>
-          <span className="meta-card__value">
-            {activeTable.players.length}/4
-          </span>
-          <span className="meta-card__hint">
-            {activeTable.players.length < 2
-              ? "Se requieren 2 jugadores"
-              : "Mesa lista"}
-          </span>
-        </div>
-        {game && (
-          <div className="meta-card">
-            <span className="meta-card__label">Ronda</span>
-            <span className="meta-card__value">{game.round}</span>
-            <span className="meta-card__hint">Progreso actual</span>
-          </div>
-        )}
-      </div>
-      {game ? (
-        <>
-          <div className="game-status">
-            <div
-              className={
-                isMyTurn ? "stat-card stat-card--highlight" : "stat-card"
-              }
-            >
-              <span className="stat-card__label">Turno actual</span>
-              <span className="stat-card__value">
-                {currentPlayer ? currentPlayer.name : "Pendiente"}
-              </span>
-              <span className="stat-card__hint">
-                {isMyTurn
-                  ? "Es tu turno"
-                  : game.currentTurn.step === "draw"
-                  ? "Debe robar una ficha"
-                  : "Debe descartar una ficha"}
-              </span>
-            </div>
-            <div className="stat-card">
-              <span className="stat-card__label">Paso</span>
-              <span className="stat-card__value">
-                {TURN_STEP_LABEL[game.currentTurn.step]}
-              </span>
-              <span className="stat-card__hint">
-                {game.currentTurn.drawnFrom
-                  ? `Robó del ${DRAW_SOURCE_LABEL[game.currentTurn.drawnFrom]}`
-                  : "Aún no ha robado"}
-              </span>
-            </div>
-            <div className="stat-card">
-              <span className="stat-card__label">Ronda</span>
-              <span className="stat-card__value">{game.round}</span>
-              <span className="stat-card__hint">
-                {game.phase === "finished"
-                  ? "Partida finalizada"
-                  : "Partida en juego"}
-              </span>
-            </div>
-            <div className="stat-card">
-              <span className="stat-card__label">Mazo</span>
-              <span className="stat-card__value">{game.stockCount}</span>
-              <span className="stat-card__hint">Fichas restantes</span>
-            </div>
-            <div className="stat-card">
-              <span className="stat-card__label">Descarte</span>
-              <span className="stat-card__value">
-                {discardLabel ?? "Vacío"}
-              </span>
-              <span className="stat-card__hint">
-                {discardTop ? `${discardTop.value} pts` : "Sin fichas aún"}
-              </span>
-            </div>
-            <div className="stat-card">
-              <span className="stat-card__label">Juegos en mesa</span>
-              <span className="stat-card__value">{tableMelds.length}</span>
-              <span className="stat-card__hint">
-                {tableMelds.length === 0
-                  ? "Sin juegos todavía"
-                  : "Listos para extender"}
-              </span>
-            </div>
-          </div>
-          {game.phase === "finished" && (
-            <p className="game-end">
-              Partida terminada. Ganador: {winner ? winner.name : "—"}
-            </p>
-          )}
-        </>
-      ) : (
-        <p className="panel__empty">La partida aún no ha comenzado.</p>
-      )}
-    </section>
+    <GameInfo
+      activeTable={activeTable}
+      game={game}
+      tableMelds={tableMelds}
+      discardHistory={discardHistory}
+      discardCount={discardCount}
+      discardLabel={discardLabel}
+      isMyTurn={isMyTurn}
+      currentPlayerName={currentPlayer ? currentPlayer.name : null}
+      winnerName={winner ? winner.name : null}
+    />
   ) : null;
 
   const tableMeldsSection = game ? (
-    <section className="game-section" aria-labelledby="table-melds-title">
-      <div className="table-melds">
-        <div className="table-melds__header">
-          <h3 id="table-melds-title">Juegos sobre la mesa</h3>
-          <span className="chip chip--info">{tableMelds.length}</span>
-        </div>
-        {tableMelds.length === 0 ? (
-          <p className="table-melds__empty">Todavía no hay juegos bajados.</p>
-        ) : (
-          <ul className="meld-list">
-            {tableMelds.map((meld) => {
-              const isSelected = meld.id === selectedMeldId;
-              return (
-                <li key={meld.id} className="meld-list__item">
-                  <button
-                    type="button"
-                    className={[
-                      "meld-card",
-                      isSelected ? "meld-card--selected" : "",
-                    ]
-                      .filter(Boolean)
-                      .join(" ")}
-                    onClick={() => handleSelectMeld(meld.id)}
-                  >
-                    <span className="meld-card__label">
-                      {describeMeld(meld)}
-                    </span>
-                    <div className="meld-card__cards">
-                      {meld.cards.map((card) => (
-                        <span
-                          key={card.id}
-                          className={[
-                            "meld-card__number",
-                            getCardColorClass(card),
-                          ]
-                            .filter(Boolean)
-                            .join(" ")}
-                          aria-label={describeCard(card)}
-                        >
-                          {getCardDisplayValue(card)}
-                        </span>
-                      ))}
-                    </div>
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
-        )}
-      </div>
-    </section>
+    <TableMelds
+      tableMelds={tableMelds}
+      players={game.players}
+      selectedMeldId={selectedMeldId}
+      handleSelectMeld={handleSelectMeld}
+      describeMeld={describeMeld}
+      getCardColorClass={getCardColorClass}
+      getCardDisplayValue={getCardDisplayValue}
+      describeCard={describeCard}
+    />
   ) : null;
 
   const compactTabContent: Record<"info" | "players" | "melds", ReactNode> = {
@@ -643,181 +614,81 @@ const App = () => {
 
   return (
     <div className="app">
-      {shouldRenderHeader && (
-        <header className={appHeaderClassName}>
-          {!activeTable && (
-            <div>
-              <h1>Burako Online</h1>
-              <p className="app__subtitle">Lobby temprano · Real-time</p>
-            </div>
-          )}
-          {showCompactTabsInHeader && renderCompactTabNav()}
-        </header>
-      )}
+      <Header
+        shouldRenderHeader={shouldRenderHeader}
+        activeTable={activeTable}
+        showCompactTabsInHeader={showCompactTabsInHeader}
+        appHeaderClassName={appHeaderClassName}
+        renderCompactTabNav={renderCompactTabNav}
+      />
 
-      {!activeTable && (
+      {(!activeTable || isViewingLobby) && (
         <>
-          <section className="panel" aria-labelledby="player-panel">
-            <div className="panel__header" id="player-panel">
-              <h2>Tu mesa</h2>
-            </div>
-            <form className="panel__form" onSubmit={handleNameSubmit}>
-              <label className="panel__label" htmlFor="player-name">
-                Nombre de jugador
-              </label>
-              <div className="panel__field-group">
-                <input
-                  id="player-name"
-                  value={rawName}
-                  onChange={(event) => setRawName(event.target.value)}
-                  placeholder="Ingresa tu nombre"
-                  maxLength={32}
-                />
-                <button type="button" onClick={() => setRawName(randomName())}>
-                  Aleatorio
-                </button>
-              </div>
-              <div className="panel__actions">
-                <button
-                  type="button"
-                  onClick={handleCreateTable}
-                  disabled={state.isConnecting}
-                >
-                  Crear mesa
-                </button>
-                <button
-                  type="button"
-                  onClick={handleLeaveTable}
-                  disabled={!activeTable && !selectedTableId}
-                >
-                  Salir de mesa
-                </button>
-              </div>
-            </form>
-            {state.error && <p className="panel__error">{state.error}</p>}
-          </section>
-
-          <section className="panel" aria-labelledby="lobby-panel">
-            <div className="panel__header" id="lobby-panel">
-              <h2>Salas disponibles</h2>
-              <span>{state.tables.length} mesas</span>
-            </div>
-            {state.tables.length === 0 ? (
-              <p className="panel__empty">
-                No hay mesas todavía. ¡Crea la primera!
+          {activeTable && isViewingLobby ? (
+            <div className="panel__notice">
+              <p>
+                Estás en la mesa <strong>{activeTable.id}</strong>. Puedes
+                volver a la partida o rendirte.
               </p>
-            ) : (
-              <ul className="table-list">
-                {state.tables.map((table) => {
-                  const isSelected = table.id === selectedTableId;
-                  const statusLabel = TABLE_STATUS_LABEL[table.status];
-                  const summary = table.game;
-                  const description = summary
-                    ? `Ronda ${summary.round} · ${summary.meldCount} juegos`
-                    : table.status === "waiting"
-                    ? `Faltan ${Math.max(0, 2 - table.playerCount)} jugador(es)`
-                    : table.status === "playing"
-                    ? "Partida en curso"
-                    : "Partida finalizada";
-                  return (
-                    <li
-                      key={table.id}
-                      className={
-                        isSelected
-                          ? "table-list__item table-list__item--selected"
-                          : "table-list__item"
-                      }
-                    >
-                      <div className="table-list__header">
-                        <div className="table-list__title">
-                          <h3>Mesa {table.id.slice(0, 8)}</h3>
-                          <p className="table-list__description">
-                            {description}
-                          </p>
-                        </div>
-                        <span className={`chip chip--${table.status}`}>
-                          {statusLabel}
-                        </span>
-                      </div>
-                      <div className="table-list__body">
-                        <div className="table-list__meta">
-                          <div className="table-list__meta-item">
-                            <span className="table-list__meta-label">
-                              Jugadores
-                            </span>
-                            <strong>{table.playerCount}/4</strong>
-                          </div>
-                          <div className="table-list__meta-item">
-                            <span className="table-list__meta-label">
-                              Estado
-                            </span>
-                            <strong>{statusLabel}</strong>
-                          </div>
-                          {summary ? (
-                            <>
-                              <div className="table-list__meta-item">
-                                <span className="table-list__meta-label">
-                                  Ronda
-                                </span>
-                                <strong>{summary.round}</strong>
-                              </div>
-                              <div className="table-list__meta-item">
-                                <span className="table-list__meta-label">
-                                  Mazo
-                                </span>
-                                <strong>{summary.stockCount}</strong>
-                              </div>
-                              <div className="table-list__meta-item">
-                                <span className="table-list__meta-label">
-                                  Descarte
-                                </span>
-                                <strong>
-                                  {summary.discardTop
-                                    ? describeCard(summary.discardTop)
-                                    : "Vacío"}
-                                </strong>
-                              </div>
-                            </>
-                          ) : (
-                            <div className="table-list__meta-item">
-                              <span className="table-list__meta-label">
-                                Faltan
-                              </span>
-                              <strong>
-                                {Math.max(0, 2 - table.playerCount)}
-                              </strong>
-                            </div>
-                          )}
-                        </div>
-                        <div className="table-list__actions">
-                          <button
-                            type="button"
-                            onClick={() => handleJoinTable(table.id)}
-                          >
-                            Unirme
-                          </button>
-                        </div>
-                      </div>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-          </section>
+              <div className="panel__notice-actions">
+                <button type="button" onClick={handleReturnToGame}>
+                  Volver a la partida
+                </button>
+                <button
+                  type="button"
+                  className="button--danger"
+                  onClick={handleResignTable}
+                >
+                  Rendirse
+                </button>
+              </div>
+            </div>
+          ) : (
+            <PlayerPanel
+              rawName={rawName}
+              setRawName={setRawName}
+              handleCreateTable={handleCreateTable}
+              handleLeaveTable={handleResignTable}
+              state={state}
+              playerName={playerName}
+              selectedTableId={selectedTableId}
+            />
+          )}
+
+          <LobbyList
+            tables={state.tables}
+            selectedTableId={selectedTableId}
+            handleJoinTable={handleJoinTable}
+            playerName={playerName}
+          />
         </>
       )}
 
-      {activeTable && (
+      {activeTable && !isViewingLobby && (
         <section className="panel" aria-label="Panel de partida">
           <div className="panel__header panel__header--game panel__header--compact">
             <div className="panel__header-actions">
-              <button
-                type="button"
-                className="button--ghost"
-                onClick={handleLeaveTable}
-              >
-                Volver al lobby
-              </button>
+              {headerStageHint ? (
+                <div className="panel__stage-hint" aria-hidden>
+                  {headerStageHint}
+                </div>
+              ) : null}
+              <div className="panel__header-actions--right">
+                <button
+                  type="button"
+                  className="button--ghost"
+                  onClick={handleReturnToLobby}
+                >
+                  Volver al lobby
+                </button>
+                <button
+                  type="button"
+                  className="button--danger"
+                  onClick={handleResignTable}
+                >
+                  Rendirse
+                </button>
+              </div>
             </div>
           </div>
           {state.error && <p className="panel__error">{state.error}</p>}
@@ -834,173 +705,49 @@ const App = () => {
           {game ? (
             <div className="game-panel">
               <div className="game-panel__primary">
-                <div className="game-controls">
-                  <button
-                    type="button"
-                    onClick={handleDrawStock}
-                    disabled={!canDraw}
-                  >
-                    Robar del mazo
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleDrawDiscard}
-                    disabled={!canDraw || !discardTop}
-                  >
-                    Robar del descarte
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handlePlayMeld("set")}
-                    disabled={!canPlayMeld}
-                  >
-                    Bajar pierna
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handlePlayMeld("sequence")}
-                    disabled={!canPlayMeld}
-                  >
-                    Bajar escalera
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleExtendMeld}
-                    disabled={!canExtendMeld}
-                  >
-                    Agregar a juego
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleDiscardSelected}
-                    disabled={!canDiscard || selectedCardCount !== 1}
-                  >
-                    Descartar
-                  </button>
-                  <button
-                    type="button"
-                    className="button--ghost"
-                    onClick={handleClearSelection}
-                    disabled={selectedCardCount === 0 && !selectedMeldId}
-                  >
-                    Limpiar selección
-                  </button>
-                </div>
-
-                <div
-                  className="game-stage"
-                  aria-label="Palco para formar combinaciones con tus fichas"
-                >
-                  <div className="game-stage__header">
-                    <h3>Palco de fichas</h3>
-                    <span className="game-stage__count">
-                      {myHand.length} en mano
-                    </span>
-                  </div>
-                  <div className="stage-wrapper">
-                    {stagedRows.map((row, rowIndex) => (
-                      <div
-                        key={`stage-row-${rowIndex}`}
-                        className={`stage-row stage-row--${rowIndex}`}
-                      >
-                        <div className="stage-row__label">
-                          Fila {rowIndex + 1}
-                        </div>
-                        {row.length === 0 ? (
-                          <div className="stage-row__empty">
-                            Espacio disponible
-                          </div>
-                        ) : (
-                          <div className="stage-row__cards">
-                            {row.map((card) => (
-                              <button
-                                key={card.id}
-                                type="button"
-                                className={[
-                                  "card-tile",
-                                  selectedCardIds.includes(card.id)
-                                    ? "card-tile--selected"
-                                    : "",
-                                ]
-                                  .filter(Boolean)
-                                  .join(" ")}
-                                onClick={() => handleSelectCard(card.id)}
-                                aria-label={describeCard(card)}
-                              >
-                                <span
-                                  className={[
-                                    "card-tile__number",
-                                    getCardColorClass(card),
-                                  ]
-                                    .filter(Boolean)
-                                    .join(" ")}
-                                >
-                                  {getCardDisplayValue(card)}
-                                </span>
-                                <span className="card-tile__value">
-                                  {card.kind === "joker"
-                                    ? `Comodín · ${card.value} pts`
-                                    : `${card.value} pts`}
-                                </span>
-                                <span className="card-tile__pip" aria-hidden />
-                              </button>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                    <div
-                      className="stage-discard"
-                      aria-label="Pila de descarte"
-                      aria-live="polite"
-                    >
-                      <div className="stage-discard__title">Descarte</div>
-                      {discardTop ? (
-                        <div className="stage-discard__card">
-                          <span
-                            className={[
-                              "stage-discard__number",
-                              getCardColorClass(discardTop),
-                            ]
-                              .filter(Boolean)
-                              .join(" ")}
-                            aria-label={discardLabel ?? undefined}
-                          >
-                            {getCardDisplayValue(discardTop)}
-                          </span>
-                          <span className="stage-discard__value">
-                            {discardTop.kind === "joker"
-                              ? `Comodín · ${discardTop.value} pts`
-                              : `${discardTop.value} pts`}
-                          </span>
-                          <span className="card-tile__pip" aria-hidden />
-                        </div>
-                      ) : (
-                        <div className="stage-discard__empty">Vacío</div>
-                      )}
-                    </div>
-                  </div>
-                  {isMyTurn &&
-                    game.currentTurn.step === "discard" &&
-                    selectedCardCount === 0 && (
-                      <p className="stage-hint">
-                        Selecciona fichas para descartarlas o formar un juego.
-                      </p>
-                    )}
-                  {isMyTurn &&
-                    game.currentTurn.step === "discard" &&
-                    selectedCardCount > 1 && (
-                      <p className="stage-hint">
-                        Para descartar elige solo una ficha.
-                      </p>
-                    )}
-                  {!isMyTurn && (
-                    <p className="stage-hint">
-                      Turno de{" "}
-                      {currentPlayer ? currentPlayer.name : "otro jugador"}.
-                    </p>
-                  )}
-                </div>
+                <GamePrimary
+                  canDraw={canDraw}
+                  discardTop={discardTop}
+                  discardHistory={discardHistory}
+                  discardCount={discardCount}
+                  onOpenDiscard={async () => {
+                    const tableId = activeTable?.id;
+                    if (!tableId) return;
+                    const pile = await requestDiscard(tableId);
+                    if (pile && Array.isArray(pile)) {
+                      // assume pile items match Card shape
+                      setDiscardPileFull(pile as Card[]);
+                    } else {
+                      setDiscardPileFull(null);
+                    }
+                    setDiscardModalOpen(true);
+                  }}
+                  canPlayMeld={canPlayMeld}
+                  canExtendMeld={canExtendMeld}
+                  canDiscard={canDiscard}
+                  selectedCardCount={selectedCardCount}
+                  selectedMeldId={selectedMeldId}
+                  handleDrawStock={handleDrawStock}
+                  handleDrawDiscard={handleDrawDiscard}
+                  handlePlayMeld={handlePlayMeld}
+                  handleExtendMeld={handleExtendMeld}
+                  handleDiscardSelected={handleDiscardSelected}
+                  handleClearSelection={handleClearSelection}
+                  stagedRows={stagedRows}
+                  displayHand={displayHand}
+                  handleDragStart={handleDragStart}
+                  handleDragOver={handleDragOver}
+                  handleDrop={handleDrop}
+                  selectedCardIds={selectedCardIds}
+                  handleSelectCard={handleSelectCard}
+                  myHandCount={myHand.length}
+                  getCardColorClass={getCardColorClass}
+                  getCardDisplayValue={getCardDisplayValue}
+                  describeCard={describeCard}
+                  isMyTurn={isMyTurn}
+                  currentTurnStep={game?.currentTurn.step}
+                  currentPlayerName={currentPlayer ? currentPlayer.name : null}
+                />
               </div>
 
               <div
@@ -1017,8 +764,8 @@ const App = () => {
                   </>
                 ) : (
                   <div className="game-tabs__grid">
-                    {gameInfoSection}
                     {tableMeldsSection}
+                    {gameInfoSection}
                     {playerListSection}
                   </div>
                 )}
@@ -1032,6 +779,20 @@ const App = () => {
           )}
         </section>
       )}
+      <ActionOverlay
+        open={actionOverlayOpen}
+        message={actionOverlayMessage}
+        onClose={() => {
+          setActionOverlayOpen(false);
+          setActionOverlayMessage(null);
+        }}
+      />
+
+      <DiscardModal
+        open={discardModalOpen}
+        onClose={() => setDiscardModalOpen(false)}
+        discardPile={discardPileFull}
+      />
     </div>
   );
 };

@@ -31,7 +31,7 @@ body {
 #root {
   margin: 0 auto;
   padding: 2.25rem;
-  max-width: 1100px;
+  max-width: 1440px;
 }
 
 .app {
@@ -147,6 +147,29 @@ body {
 .panel__header-actions {
   display: flex;
   gap: 0.6rem;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+}
+
+/* Small hint left of action buttons in the panel header */
+.panel__stage-hint {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.45rem 0.75rem;
+  border-radius: 10px;
+  color: var(--color-text);
+  font-weight: 700;
+  font-size: 0.95rem;
+  min-width: 160px;
+}
+
+@media (max-width: 640px) {
+  .panel__stage-hint {
+    min-width: 0;
+    padding: 0.35rem 0.6rem;
+    font-size: 0.9rem;
+  }
 }
 
 .panel__form {
@@ -309,6 +332,39 @@ button:disabled {
   margin: 0.5rem 0 0;
   color: #b91c1c;
   font-weight: 600;
+}
+
+.panel__notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.75rem 1rem;
+  border-radius: 12px;
+  background: linear-gradient(
+    90deg,
+    rgba(245, 245, 250, 0.6),
+    rgba(250, 250, 255, 0.6)
+  );
+  border: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+.panel__notice-actions {
+  display: flex;
+  gap: 0.6rem;
+}
+
+.button--danger {
+  background: var(--color-danger);
+  border-color: rgba(220, 38, 38, 0.9);
+  box-shadow: none;
+  color: white;
+}
+
+.panel__header-actions--right {
+  display: flex;
+  gap: 0.6rem;
+  align-items: center;
 }
 
 .panel__empty {
@@ -500,6 +556,240 @@ button:disabled {
   margin: 0.85rem 0 0;
 }
 
+/* Compact view for game meta to use space more efficiently */
+.game-meta-compact {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 0.5rem;
+  align-items: start;
+  margin: 0.6rem 0 0;
+}
+
+.meta-compact__item {
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(218, 226, 240, 0.6);
+  border-radius: 10px;
+  padding: 0.5rem 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.meta-compact__item .meta-card__label {
+  font-size: 0.72rem;
+  color: var(--color-muted);
+}
+
+.meta-compact__item .meta-card__value {
+  font-weight: 700;
+}
+
+@media (max-width: 480px) {
+  .game-meta-compact {
+    grid-template-columns: repeat(2, minmax(100px, 1fr));
+    gap: 0.4rem;
+  }
+}
+
+/* Modal overlay and discard modal styles */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(2, 6, 23, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1200;
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+
+.modal {
+  background: var(--color-panel);
+  border-radius: 12px;
+  width: min(920px, calc(100% - 32px));
+  max-height: calc(100vh - 112px);
+  box-shadow: 0 24px 48px rgba(2, 6, 23, 0.4);
+  border: 1px solid var(--color-panel-border);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.discard-modal .modal__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid rgba(15, 23, 42, 0.04);
+}
+
+.modal__body {
+  padding: 1rem;
+  overflow: auto;
+}
+
+.modal__footer {
+  padding: 0.75rem 1rem;
+  border-top: 1px solid rgba(15, 23, 42, 0.04);
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+.modal__close {
+  background: transparent;
+  border: none;
+  font-size: 1.2rem;
+  cursor: pointer;
+  /* Mejor contraste: contenedor circular sutil y color de texto oscuro por defecto */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 999px;
+  color: var(--color-text);
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  transition: background 120ms ease, color 120ms ease, box-shadow 120ms ease;
+}
+
+/* Hover / focus states: invertir colores para máxima legibilidad */
+.modal__close:hover:not(:disabled),
+.modal__close:focus-visible {
+  background: var(--color-primary);
+  color: var(--color-primary-contrast);
+  outline: none;
+  box-shadow: 0 8px 18px rgba(124, 58, 237, 0.18);
+}
+
+/* Asegurar contraste sobre variantes más oscuras del contenedor (por ejemplo: botones blancos con sombra) */
+.discard-modal .modal__close {
+  background: rgba(255, 255, 255, 0.95);
+  color: #0f172a; /* texto oscuro por defecto */
+  border-color: rgba(148, 163, 184, 0.16);
+}
+
+.discard-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(84px, 1fr));
+  gap: 0.6rem;
+}
+
+.card-tile--mini {
+  padding: 0.5rem;
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  background: rgba(255, 255, 255, 0.95);
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  align-items: flex-start;
+}
+
+.card-tile--mini .card-tile__number {
+  font-weight: 700;
+}
+
+.button--icon {
+  border-radius: 999px;
+  padding: 0.35rem 0.5rem;
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.06);
+}
+
+.button--icon--eye {
+  margin-left: 0.5rem;
+}
+
+/* Ensure SVG icons inside .button--icon contrast with the button background.
+   The SVG should use the current text color for fill so we can control
+   contrast via the button's color property. */
+.button--icon svg {
+  width: 1rem;
+  height: 1rem;
+  display: block;
+  fill: currentColor; /* icon inherits color */
+  stroke: none;
+}
+
+/* Default icon color: use main text color for good contrast on light buttons. */
+.button--icon {
+  color: var(--color-text);
+}
+
+/* For the eye variant, make it slightly more prominent and change on hover. */
+.button--icon--eye {
+  color: var(--color-primary-dark);
+}
+.button--icon--eye:hover {
+  color: var(--color-primary);
+}
+
+/* Action overlay shown briefly when other players perform actions */
+.action-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none; /* allow clicks through when not focused */
+  z-index: 1300;
+}
+
+.action-overlay__box {
+  pointer-events: auto;
+  background: rgba(2, 6, 23, 0.9);
+  color: white;
+  padding: 1.25rem 1.5rem;
+  border-radius: 12px;
+  box-shadow: 0 20px 40px rgba(2, 6, 23, 0.6);
+  transform: translateY(-12px);
+  animation: action-overlay-in 360ms cubic-bezier(0.2, 0.9, 0.2, 1);
+}
+
+.action-overlay__text {
+  font-size: 1.35rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  text-align: center;
+}
+
+@keyframes action-overlay-in {
+  from {
+    opacity: 0;
+    transform: translateY(-18px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes action-overlay-out {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-10px) scale(0.98);
+  }
+}
+
+@media (max-width: 640px) {
+  .modal {
+    width: calc(100% - 24px);
+    border-radius: 10px;
+    max-height: calc(100vh - 40px);
+  }
+  .discard-grid {
+    grid-template-columns: repeat(auto-fill, minmax(64px, 1fr));
+  }
+}
+
 .game-meta--section {
   margin: 0 0 1rem;
 }
@@ -566,6 +856,11 @@ button:disabled {
 .game-tabs__grid {
   display: grid;
   gap: 1.15rem;
+  /* Desktop: melds full-width on first row, info + players side-by-side on second row */
+  grid-template-columns: repeat(2, minmax(320px, 1fr));
+  grid-template-areas:
+    "melds melds"
+    "info players";
 }
 
 .game-tabs__content {
@@ -685,7 +980,7 @@ button:disabled {
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
-  min-width: 72px;
+  min-width: 84px;
   align-items: center;
   box-shadow: 0 4px 8px rgba(37, 99, 235, 0.08);
   color: #1e3a8a;
@@ -770,8 +1065,12 @@ button:disabled {
 
 .stage-wrapper {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 120px;
-  grid-template-rows: repeat(3, minmax(70px, auto));
+  /* Give the main stage column a bit more relative width now that there
+     are only two rows. The discard column stays fixed to keep visual
+     consistency. */
+  grid-template-columns: minmax(0, 1.4fr) 120px;
+  /* Two rows layout for the stage (user preference). */
+  grid-template-rows: repeat(2, minmax(80px, auto));
   gap: 1rem;
   align-items: center;
 }
@@ -791,7 +1090,7 @@ button:disabled {
 .stage-row__cards {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.5rem;
+  gap: 0.65rem;
 }
 
 .stage-row__empty {
@@ -807,8 +1106,10 @@ button:disabled {
 }
 
 .stage-discard {
-  grid-row: 2;
+  /* Place the discard pile on the right column and span both rows so it
+     visually centers between the two stage rows. */
   grid-column: 2;
+  grid-row: 1 / span 2;
   background: #ffffff;
   border: 1px solid #e0e7ff;
   border-radius: 12px;
@@ -871,11 +1172,6 @@ button:disabled {
   grid-column: 1;
 }
 
-.stage-row--2 {
-  grid-row: 3;
-  grid-column: 1;
-}
-
 .table-melds {
   background: #f8fafc;
   border: 1px solid #e2e8f0;
@@ -884,6 +1180,23 @@ button:disabled {
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
+}
+
+/* Place children of the grid into named areas */
+.game-tabs__grid > *:nth-child(1) {
+  grid-area: melds;
+}
+
+.game-tabs__grid > *:nth-child(2) {
+  grid-area: info;
+}
+
+.game-tabs__grid > *:nth-child(3) {
+  grid-area: players;
+}
+
+.game-tabs__grid {
+  grid-auto-rows: minmax(0, auto);
 }
 
 .table-melds__header {
@@ -1074,7 +1387,7 @@ button:disabled {
   }
 
   .card-tile {
-    min-width: 64px;
+    min-width: 72px;
     padding: 0.45rem 0.6rem;
   }
 
